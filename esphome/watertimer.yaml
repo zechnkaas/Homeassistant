@@ -1,0 +1,99 @@
+substitutions:
+  esp_name: espwatertimer
+  def_updatetime: 60s
+
+esphome:
+  name: ${esp_name}
+  platform: ESP8266
+  board: esp01_1m
+
+wifi:
+  ssid: !secret wlanname
+  password: !secret wlanpsk
+  ap:
+    ssid: ${esp_name}
+    password: !secret esp_fallback_ap_psk
+
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: !secret esp_webpsw
+api:
+  password: !secret esp_api_psw
+ota:
+  password: !secret esp_ota_psw
+
+text_sensor:
+  - platform: template
+    name: ${esp_name} Uptime
+    id: ${esp_name}_uptime_human
+    icon: mdi:clock-start
+
+sensor:
+  - platform: wifi_signal
+    name: ${esp_name} Signal
+    id: ${esp_name}_signal
+    update_interval: ${def_updatetime}
+
+  - platform: uptime
+    name: ${esp_name} Uptime Sensor
+    id: ${esp_name}_uptime_sensor
+    update_interval: ${def_updatetime}
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: ${esp_name}_uptime_human
+            state: !lambda |-
+              int seconds = round(id(${esp_name}_uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? String(days) + "d " : "") +
+                (hours ? String(hours) + "h " : "") +
+                (minutes ? String(minutes) + "m " : "") +
+                (String(seconds) + "s")
+              ).c_str();
+
+binary_sensor:
+  - platform: gpio
+    name: "${esp_name} Water state"
+    id: "${esp_name}_water_state"
+    pin:
+      number: 3
+      mode: INPUT_PULLUP
+
+switch:
+  - platform: shutdown
+    name: "${esp_name} Shutdown"
+
+  - platform: gpio
+    pin: 0
+    inverted: yes
+    internal: true
+    name: ${esp_name}_Relais_1
+    id: ${esp_name}_relais_1
+    
+  - platform: template
+    name: "Water"
+    lambda: |-
+      if (id(${esp_name}_water_state).state) {
+        return true;
+      } else {
+        return false;
+      }
+    id: ${esp_name}_water_switch
+    turn_on_action:
+    - switch.turn_on: ${esp_name}_relais_1
+    - wait_until:
+        binary_sensor.is_on: ${esp_name}_water_state
+    - switch.turn_off: ${esp_name}_relais_1
+    turn_off_action:
+    - switch.turn_on: ${esp_name}_relais_1
+    - wait_until:
+        binary_sensor.is_off: ${esp_name}_water_state
+    - switch.turn_off: ${esp_name}_relais_1
