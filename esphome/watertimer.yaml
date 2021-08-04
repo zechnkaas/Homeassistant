@@ -68,8 +68,6 @@ binary_sensor:
       mode: INPUT_PULLUP
 
 switch:
-  - platform: shutdown
-    name: "${esp_name} Shutdown"
 
   - platform: gpio
     pin: 0
