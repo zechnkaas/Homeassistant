@@ -1,0 +1,352 @@
+substitutions:
+  esp_name: espmeter
+  def_updatetime: 60s
+  gpiosda: GPIO21
+  gpioscl: GPIO19
+  power_updatetime: 1s
+  sensorname: Haus
+  sensorname2: Heizung
+  disp_timeout: 10min
+  GPIOBUT1: GPIO32
+  # You can use 2 IR TTL for 2 Powermeters
+  # just uncomment
+  gpiouarttx1: GPIO22
+  gpiouartrx1: GPIO23
+  # gpiouarttx2: GPIO17
+  # gpiouartrx2: GPIO16
+
+api:
+  encryption:
+    key: !secret esp_api_enc
+  reboot_timeout: 0s
+esphome:
+  name: ${esp_name}
+  on_boot:
+    priority: 800
+    then:
+      - script.execute: display_timeout
+  platform: ESP32
+  board: esp32dev
+
+wifi:
+  ssid: !secret wlanname
+  password: !secret wlanpsk
+  ap:
+    ssid: ${esp_name}
+    password: !secret esp_fallback_ap_psk
+
+logger:
+  level: none
+  baud_rate: 0
+
+web_server:
+  port: 80
+  auth:
+    username: admin
+    password: !secret esp_webpsw
+
+ota:
+  password: !secret esp_ota_psw
+
+time:
+- platform: homeassistant
+  id: my_time
+  timezone: Europe/Vienna
+
+external_components:
+  - source: github://Floriansimmer/esphome-amis
+    components: amis
+    refresh: 0s
+
+i2c:
+ sda: ${gpiosda}
+ scl: ${gpioscl}
+ scan: True
+ id: bus_a
+
+uart:
+  - id: uart_1
+    tx_pin: ${gpiouarttx1}
+    rx_pin: ${gpiouartrx1}
+    baud_rate: 9600
+    parity: even
+
+  # - id: uart_2
+  #   tx_pin: ${gpiouarttx2}
+  #   rx_pin: ${gpiouartrx2}
+  #   baud_rate: 9600
+  #   parity: even
+
+
+text_sensor:
+  - platform: template
+    name: ${esp_name} Uptime
+    id: ${esp_name}_uptime_human
+    icon: mdi:clock-start
+
+  - platform: wifi_info
+    ip_address:
+      name: ${esp_name} IP Address
+      id: ${esp_name}_ip_address
+    ssid:
+      name: ${esp_name} Connected SSID
+      id: ${esp_name}_ssid
+    mac_address:
+      name: ${esp_name} Mac Wifi Address
+      id: ${esp_name}_mac_address
+
+sensor:
+  - platform: wifi_signal
+    name: ${esp_name} Signal
+    id: ${esp_name}_signal
+    update_interval: ${def_updatetime}
+
+  - platform: uptime
+    name: ${esp_name} Uptime Sensor
+    id: ${esp_name}_uptime_sensor
+    update_interval: ${def_updatetime}
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: ${esp_name}_uptime_human
+            state: !lambda |-
+              int seconds = round(id(${esp_name}_uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? String(days) + "d " : "") +
+                (hours ? String(hours) + "h " : "") +
+                (minutes ? String(minutes) + "m " : "") +
+                (String(seconds) + "s")
+              ).c_str();
+
+  - platform: htu21d
+    temperature:
+      id: "${esp_name}_temperature_1"
+      name: "${esp_name} Temperature"
+    humidity:
+      id: "${esp_name}_humidity_1"
+      name: "${esp_name} Humidity"
+    update_interval: ${def_updatetime}
+
+  - platform: amis
+    uart_id: uart_1
+    power_grid_key: !secret amishaus
+    energy_a_positive:
+      name: ${sensorname} Energy A+
+    energy_a_negative:
+      name: ${sensorname} Energy A-
+    # reactive_energy_a_positive:
+    #   name: ${sensorname} Reactive Energy A+
+    #   internal: true
+    # reactive_energy_a_negative:
+    #   name: ${sensorname} Reactive Energy A-
+    #   internal: true
+    instantaneous_power_a_positive:
+      name: "${sensorname} Instantaneous Power A+"
+      id: ${sensorname}_instantaneous_power_a
+    instantaneous_power_a_negative:
+      name: ${sensorname} Instantaneous Power A-
+      id: ${sensorname}_instantaneous_power_aa
+    reactive_instantaneous_power_a_positive:
+      name: ${sensorname} Reactive Instantaneous Power A+
+      internal: true
+    reactive_instantaneous_power_a_negative:
+      name: ${sensorname} Reactive Instantaneous Power A-
+      internal: true
+
+  - platform: template
+    name: "${sensorname} Power"
+    id: ${esp_name}_${sensorname}_power
+    lambda: |-
+      return (id(${sensorname}_instantaneous_power_a).state - id(${sensorname}_instantaneous_power_aa).state);      
+    update_interval: 1s
+    device_class: energy
+    unit_of_measurement: W
+    icon: mdi:flash
+
+  - platform: total_daily_energy
+    name: "${sensorname} Daily Energy"
+    power_id: ${sensorname}_instantaneous_power_a
+    filters:
+        - multiply: 0.001
+    unit_of_measurement: kWh
+    icon: mdi:clock-alert
+
+
+  # - platform: amis
+  #   uart_id: uart_2
+  #   power_grid_key: !secret amiswp
+  #   energy_a_positive:
+  #     name: ${sensorname2} Energy A+
+  #   energy_a_negative:
+  #     name: ${sensorname2} Energy A-
+  #   instantaneous_power_a_positive:
+  #     name: "${sensorname2} Instantaneous Power A+"
+  #     id: ${sensorname2}_instantaneous_power_a
+  #   instantaneous_power_a_negative:
+  #     name: ${sensorname2} Instantaneous Power A-
+  #     id: ${sensorname2}_instantaneous_power_aa
+
+  # - platform: template
+  #   name: "${sensorname2} Power"
+  #   id: ${esp_name}_${sensorname2}_power
+  #   lambda: |-
+  #     return (id(${sensorname2}_instantaneous_power_a).state - id(${sensorname2}_instantaneous_power_aa).state);      
+  #   device_class: energy
+  #   unit_of_measurement: W
+  #   icon: mdi:flash
+
+  # - platform: total_daily_energy
+  #   name: "${sensorname} Daily Energy"
+  #   power_id: ${sensorname}_instantaneous_power_a
+  #   filters:
+  #       - multiply: 0.001
+  #   unit_of_measurement: kWh
+  #   icon: mdi:clock-alert
+
+  # - platform: total_daily_energy
+  #   name: "${sensorname2} Daily Energy"
+  #   power_id: ${sensorname2}_instantaneous_power_a
+  #   filters:
+  #       - multiply: 0.001
+  #   unit_of_measurement: kWh
+  #   icon: mdi:clock-alert
+
+switch:
+  - platform: shutdown
+    name: "${esp_name} Shutdown"
+  - platform: restart
+    name: "${esp_name} Reboot"
+  - platform: template
+    name: "Toggle Display OnOff"
+    id: ${esp_name}_display_onoff
+    turn_on_action:
+      - lambda: |-
+          id(display1).turn_on();  
+      - script.execute: display_timeout        
+    turn_off_action:
+      - lambda: |-
+          id(display1).turn_off();          
+    restore_mode: always_on
+    optimistic: true
+    internal: true
+
+font:
+  - file: "gfonts://Roboto"
+    id: font1
+    size: 19
+  - file: "gfonts://Roboto"
+    id: font2
+    size: 12
+  - file: "gfonts://Roboto"
+    id: font3
+    size: 10
+  - file: '/config/esphome/fonts/consola.ttf' #(you can find it in your C:\Windows\Fonts\ folder)
+    id: font4
+    size: 10
+  - file: '/config/esphome/fonts/consola.ttf'
+    id: font5
+    size: 12
+
+binary_sensor:
+  - platform: gpio
+    name: "${esp_name} Button 1"
+    id: ${esp_name}_button1
+    pin:
+      number:  ${GPIOBUT1}
+      inverted: true
+      mode: INPUT_PULLUP
+    on_press:
+      - if:
+          condition:
+            switch.is_on: ${esp_name}_display_onoff
+          then:
+            - display.page.show_next: display1
+            - script.execute: display_timeout
+          else:
+            - switch.turn_on: ${esp_name}_display_onoff
+    internal: true
+
+script:
+  - id: display_timeout
+    mode: restart
+    then:
+      - delay: ${disp_timeout}
+      - switch.turn_off: ${esp_name}_display_onoff
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    id: display1
+    address: 0x3C
+    pages:
+      - id: page1
+        lambda: |-
+            // Layout
+            it.line(1,20,127,20,COLOR_ON);
+            it.rectangle(0,0,128,64,COLOR_ON);
+
+            it.print(64, 0, id(font1), TextAlign::TOP_CENTER, "Power meter");
+
+            it.strftime(6, 25, id(font2), "%d.%m.%Y %H:%M:%S", id(my_time).now());
+            if (id(${esp_name}_uptime_human).has_state()) {
+              it.printf(6, 53, id(font3), TextAlign::BASELINE_LEFT, "Uptime: %s", id(${esp_name}_uptime_human).state.c_str());
+            }          
+      - id: page2
+        lambda: |-
+          // Layout
+          it.line(1,20,127,20,COLOR_ON);
+          it.rectangle(0,0,128,64,COLOR_ON);
+
+          it.print(64, 0, id(font1), TextAlign::TOP_CENTER, "Wifi");
+
+          if (id(${esp_name}_signal).has_state()) {
+            it.printf(6, 25, id(font4), "Signal: %.0f dBm", id(${esp_name}_signal).state);
+          }
+          if (id(${esp_name}_ssid).has_state()) {
+            it.printf(6, 37, id(font4), "SSID: %s", id(${esp_name}_ssid).state.c_str());
+          }
+          if (id(${esp_name}_ip_address).has_state()) {
+            it.printf(6, 49, id(font4), "IP: %s", id(${esp_name}_ip_address).state.c_str());
+          }          
+      - id: page3
+        lambda: |-
+          // Layout
+          it.line(1,20,126,20,COLOR_ON);
+          it.rectangle(0,0,128,64,COLOR_ON);
+
+          it.print(64, 0, id(font1), TextAlign::TOP_CENTER, "Zaehler 1");
+
+          if (id(${sensorname}_instantaneous_power_a).has_state()) {
+            it.printf(6, 24, id(font4), "In:  %.0f W", id(${sensorname}_instantaneous_power_a).state);
+          } else {
+            it.print(6, 24, id(font4), "In:  na W");
+          }
+          if (id(${sensorname}_instantaneous_power_aa).has_state()) {
+            it.printf(6, 35, id(font4), "Out: %.0f W", id(${sensorname}_instantaneous_power_aa).state);
+          } else {
+            it.print(6, 35, id(font4), "Out: na W");
+          }
+          if (id(${esp_name}_${sensorname}_power).has_state()) {
+            it.printf(6, 47, id(font5), "Total: %.0f W", id(${esp_name}_${sensorname}_power).state);
+          } else {
+            it.print(6, 47, id(font5), "Total: na W");
+          }          
+      - id: page4
+        lambda: |-
+          // Layout
+          it.line(1,20,127,20,COLOR_ON);
+          it.rectangle(0,0,128,64,COLOR_ON);
+
+          it.print(64, 0, id(font1), TextAlign::TOP_CENTER, "Power meter");
+          if (id(${esp_name}_temperature_1).has_state()) {
+            it.printf(6, 37, id(font4), TextAlign::BASELINE_LEFT, "Temperature: %.1f °C", id(${esp_name}_temperature_1).state);
+          } 
+          if (id(${esp_name}_humidity_1).has_state()) {
+            it.printf(6, 51, id(font4), TextAlign::BASELINE_LEFT, "Humidity:    %3.1f %%", id(${esp_name}_humidity_1).state);
+          }
